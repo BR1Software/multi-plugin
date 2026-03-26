@@ -35,7 +35,8 @@ zip:team-toolkit.zip
 ```
 
 ## Installation
-1. Copy the `bulk-plugin-installer` folder to `wp-content/plugins/`.
+1.A Copy the `bulk-plugin-installer` folder to `wp-content/plugins/`.
+1.B Or upload the ziped plugin in the WordPress dashboard.
 2. Activate **Bulk Plugin Installer** in WordPress.
 3. Go to **Tools > Bulk Plugin Installer**.
 4. Upload your manifest file and (optionally) local ZIP files.
