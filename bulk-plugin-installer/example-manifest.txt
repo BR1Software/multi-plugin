@@ -1,0 +1,10 @@
+# Repository plugins
+# akismet
+# repo:classic-editor
+
+# Direct ZIP URL
+# url:https://downloads.wordpress.org/plugin/query-monitor.3.16.0.zip
+
+# Local ZIP files uploaded in the same form submission
+# zip:my-custom-plugin.zip
+# zip:team-toolkit.zip
