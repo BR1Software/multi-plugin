@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Bulk Plugin Installer
  * Description: Install multiple plugins from repository slugs, ZIP URLs, or uploaded ZIP files using a manifest text file.
- * Version: 1.0.0
+ * Version: 1.0.1
  * Author: BR1 Software Ltd
  * License: GPL-2.0-or-later
  */
@@ -66,6 +66,7 @@ class BPI_Bulk_Plugin_Installer {
 		<div class="wrap">
 			<h1><?php esc_html_e( 'Bulk Plugin Installer', 'bulk-plugin-installer' ); ?></h1>
 			<p><?php esc_html_e( 'Install plugins from repository slugs, direct ZIP URLs, and uploaded ZIP files using a text manifest.', 'bulk-plugin-installer' ); ?></p>
+			<p><?php esc_html_e( 'I recommend taking a full backup of your site before using this plugin.', 'bulk-plugin-installer' ); ?></p>
 
 			<form method="post" enctype="multipart/form-data">
 				<?php wp_nonce_field( 'bpi_install_plugins_action', 'bpi_nonce' ); ?>
