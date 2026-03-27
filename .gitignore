@@ -1,0 +1,18 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+.vscode/
+.idea/
+dist/
+build/
+node_modules/
+playwright-data/
+db-data/
+# Ignore local sqlite DB file generated in data/
+data/*.db
