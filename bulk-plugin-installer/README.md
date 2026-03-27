@@ -8,6 +8,11 @@ Bulk install WordPress plugins from:
 - Direct ZIP URLs
 - Local ZIP files uploaded from your computer
 
+The installer provides run feedback after submission:
+- Summary notice with success, warning, and error counts
+- Per-item results table
+- Detailed failure log with a one-click download button when any install fails
+
 ## Manifest format
 Use a plain text file (`.txt`) with one plugin source per line.
 

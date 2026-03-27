@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Bulk Plugin Installer
  * Description: Install multiple plugins from repository slugs, ZIP URLs, or uploaded ZIP files using a manifest text file.
- * Version: 1.0.1
+ * Version: 1.0.2
  * Author: BR1 Software Ltd
  * License: GPL-2.0-or-later
  */
@@ -42,24 +42,62 @@ class BPI_Bulk_Plugin_Installer {
 			wp_die( esc_html__( 'You do not have permission to install plugins.', 'bulk-plugin-installer' ) );
 		}
 
-		$results = array();
+		$results      = array();
+		$process_log  = array();
+		$has_failures = false;
 
 		if ( 'POST' === $_SERVER['REQUEST_METHOD'] && isset( $_POST['bpi_install_plugins'] ) ) {
 			check_admin_referer( 'bpi_install_plugins_action', 'bpi_nonce' );
+			self::log_event( $process_log, 'info', __( 'Bulk install request received.', 'bulk-plugin-installer' ) );
 
 			$activate_after_install = ! empty( $_POST['bpi_activate_plugins'] );
+			self::log_event(
+				$process_log,
+				'info',
+				$activate_after_install
+					? __( 'Auto-activation is enabled.', 'bulk-plugin-installer' )
+					: __( 'Auto-activation is disabled.', 'bulk-plugin-installer' )
+			);
 			$parsed_input           = self::parse_manifest_from_upload();
 
 			if ( is_wp_error( $parsed_input ) ) {
+				self::log_event( $process_log, 'error', $parsed_input->get_error_message(), __( 'Manifest parsing failed.', 'bulk-plugin-installer' ) );
 				$results[] = array(
 					'item'   => __( 'Manifest', 'bulk-plugin-installer' ),
 					'status' => 'error',
 					'message' => $parsed_input->get_error_message(),
 				);
 			} else {
+				self::log_event(
+					$process_log,
+					'info',
+					sprintf(
+						/* translators: %d: number of parsed manifest items */
+						__( 'Manifest parsed successfully (%d items).', 'bulk-plugin-installer' ),
+						count( $parsed_input )
+					)
+				);
 				$uploaded_zips = self::get_uploaded_zip_map();
-				$results       = self::install_plugins_from_items( $parsed_input, $uploaded_zips, $activate_after_install );
+				self::log_event(
+					$process_log,
+					'info',
+					sprintf(
+						/* translators: %d: number of uploaded ZIP files */
+						__( 'Uploaded ZIP files available: %d.', 'bulk-plugin-installer' ),
+						count( $uploaded_zips )
+					)
+				);
+				$results       = self::install_plugins_from_items( $parsed_input, $uploaded_zips, $activate_after_install, $process_log );
 			}
+
+			$has_failures = self::results_have_failures( $results );
+			self::log_event(
+				$process_log,
+				$has_failures ? 'warning' : 'info',
+				$has_failures
+					? __( 'Install run completed with issues. Review the results and log below.', 'bulk-plugin-installer' )
+					: __( 'Install run completed successfully.', 'bulk-plugin-installer' )
+			);
 		}
 
 		?>
@@ -103,7 +141,9 @@ class BPI_Bulk_Plugin_Installer {
 			</form>
 
 			<?php self::render_manifest_help(); ?>
+			<?php self::render_feedback_summary( $results ); ?>
 			<?php self::render_results( $results ); ?>
+			<?php self::render_process_log( $process_log, $has_failures ); ?>
 		</div>
 		<?php
 	}
@@ -268,7 +308,7 @@ class BPI_Bulk_Plugin_Installer {
 	 * @param bool  $activate_after_install Activate after install.
 	 * @return array
 	 */
-	private static function install_plugins_from_items( $items, $uploaded_zips, $activate_after_install ) {
+	private static function install_plugins_from_items( $items, $uploaded_zips, $activate_after_install, &$process_log = array() ) {
 		require_once ABSPATH . 'wp-admin/includes/file.php';
 		require_once ABSPATH . 'wp-admin/includes/misc.php';
 		require_once ABSPATH . 'wp-admin/includes/plugin.php';
@@ -281,10 +321,13 @@ class BPI_Bulk_Plugin_Installer {
 		$seen_sources = array();
 		$seen_folders = array();
 		$existing_plugin_dirs = self::get_existing_plugin_dir_set();
+		self::log_event( $process_log, 'info', __( 'Beginning plugin installation run.', 'bulk-plugin-installer' ) );
 
 		foreach ( $items as $item ) {
+			self::log_event( $process_log, 'info', sprintf( __( 'Processing source %s.', 'bulk-plugin-installer' ), $item['label'] ) );
 			$source_key = $item['type'] . ':' . $item['value'];
 			if ( isset( $seen_sources[ $source_key ] ) ) {
+				self::log_event( $process_log, 'warning', __( 'Duplicate manifest entry detected. Entry skipped.', 'bulk-plugin-installer' ), $item['label'] );
 				$results[] = array(
 					'item'    => $item['label'],
 					'status'  => 'warning',
@@ -298,6 +341,7 @@ class BPI_Bulk_Plugin_Installer {
 			$inferred_folder = self::infer_plugin_folder_from_item( $item );
 			if ( ! empty( $inferred_folder ) ) {
 				if ( isset( $seen_folders[ $inferred_folder ] ) ) {
+					self::log_event( $process_log, 'warning', __( 'Potential plugin directory collision detected. Entry skipped.', 'bulk-plugin-installer' ), $item['label'] );
 					$results[] = array(
 						'item'    => $item['label'],
 						'status'  => 'warning',
@@ -311,6 +355,7 @@ class BPI_Bulk_Plugin_Installer {
 				}
 
 				if ( isset( $existing_plugin_dirs[ $inferred_folder ] ) ) {
+					self::log_event( $process_log, 'warning', __( 'Matching plugin directory already exists. Entry skipped.', 'bulk-plugin-installer' ), $item['label'] );
 					$results[] = array(
 						'item'    => $item['label'],
 						'status'  => 'warning',
@@ -326,8 +371,10 @@ class BPI_Bulk_Plugin_Installer {
 
 			switch ( $item['type'] ) {
 				case 'repo':
+					self::log_event( $process_log, 'info', __( 'Resolving repository download link.', 'bulk-plugin-installer' ), $item['label'] );
 					$download_link = self::get_repo_download_link( $item['value'] );
 					if ( is_wp_error( $download_link ) ) {
+						self::log_event( $process_log, 'error', $download_link->get_error_message(), $item['label'] );
 						$results[] = array(
 							'item'    => $item['label'],
 							'status'  => 'error',
@@ -337,12 +384,15 @@ class BPI_Bulk_Plugin_Installer {
 					}
 
 					$install_target = $download_link;
+					self::log_event( $process_log, 'info', __( 'Repository download link resolved.', 'bulk-plugin-installer' ), $item['label'] );
 					break;
 				case 'url':
 					$install_target = $item['value'];
+					self::log_event( $process_log, 'info', __( 'Using direct ZIP URL source.', 'bulk-plugin-installer' ), $item['label'] );
 					break;
 				case 'zip':
 					if ( empty( $uploaded_zips[ $item['value'] ] ) ) {
+						self::log_event( $process_log, 'error', __( 'Uploaded ZIP not found for manifest entry.', 'bulk-plugin-installer' ), $item['label'] );
 						$results[] = array(
 							'item'    => $item['label'],
 							'status'  => 'error',
@@ -351,14 +401,17 @@ class BPI_Bulk_Plugin_Installer {
 						continue 2;
 					}
 					$install_target = $uploaded_zips[ $item['value'] ];
+					self::log_event( $process_log, 'info', __( 'Using uploaded ZIP source.', 'bulk-plugin-installer' ), $item['label'] );
 					break;
 			}
 
 			$skin     = new Automatic_Upgrader_Skin();
 			$upgrader = new Plugin_Upgrader( $skin );
+			self::log_event( $process_log, 'info', __( 'Starting installation.', 'bulk-plugin-installer' ), $item['label'] );
 			$installed = $upgrader->install( $install_target );
 
 			if ( is_wp_error( $installed ) ) {
+				self::log_event( $process_log, 'error', $installed->get_error_message(), $item['label'] );
 				$results[] = array(
 					'item'    => $item['label'],
 					'status'  => 'error',
@@ -372,6 +425,7 @@ class BPI_Bulk_Plugin_Installer {
 				if ( ! empty( $skin->result ) && is_wp_error( $skin->result ) ) {
 					$message = $skin->result->get_error_message();
 				}
+				self::log_event( $process_log, 'error', $message, $item['label'] );
 
 				$results[] = array(
 					'item'    => $item['label'],
@@ -382,10 +436,13 @@ class BPI_Bulk_Plugin_Installer {
 			}
 
 			$plugin_file = self::detect_installed_plugin_file( $upgrader, $item );
+			self::log_event( $process_log, 'info', __( 'Installation completed successfully.', 'bulk-plugin-installer' ), $item['label'] );
 
 			if ( $activate_after_install && ! empty( $plugin_file ) ) {
+				self::log_event( $process_log, 'info', __( 'Attempting activation.', 'bulk-plugin-installer' ), $item['label'] );
 				$activation = activate_plugin( $plugin_file );
 				if ( is_wp_error( $activation ) ) {
+					self::log_event( $process_log, 'warning', $activation->get_error_message(), $item['label'] );
 					$results[] = array(
 						'item'    => $item['label'],
 						'status'  => 'warning',
@@ -403,6 +460,7 @@ class BPI_Bulk_Plugin_Installer {
 					'status'  => 'success',
 					'message' => __( 'Installed and activated.', 'bulk-plugin-installer' ),
 				);
+				self::log_event( $process_log, 'info', __( 'Plugin installed and activated.', 'bulk-plugin-installer' ), $item['label'] );
 				continue;
 			}
 
@@ -411,13 +469,145 @@ class BPI_Bulk_Plugin_Installer {
 				'status'  => 'success',
 				'message' => __( 'Installed successfully.', 'bulk-plugin-installer' ),
 			);
+			self::log_event( $process_log, 'info', __( 'Plugin installed successfully.', 'bulk-plugin-installer' ), $item['label'] );
 
 			if ( ! empty( $inferred_folder ) ) {
 				$existing_plugin_dirs[ $inferred_folder ] = true;
 			}
 		}
 
+		self::log_event( $process_log, 'info', __( 'Plugin installation loop finished.', 'bulk-plugin-installer' ) );
+
 		return $results;
+	}
+
+	/**
+	 * Add a timestamped entry to the process log.
+	 *
+	 * @param array  $process_log Log entries.
+	 * @param string $level Log level.
+	 * @param string $message Entry message.
+	 * @param string $context Optional context label.
+	 */
+	private static function log_event( &$process_log, $level, $message, $context = '' ) {
+		$timestamp = gmdate( 'Y-m-d H:i:s' ) . ' UTC';
+		$prefix    = strtoupper( sanitize_key( (string) $level ) );
+		$entry     = '[' . $timestamp . '] [' . $prefix . '] ';
+
+		if ( '' !== $context ) {
+			$entry .= '[' . $context . '] ';
+		}
+
+		$entry .= wp_strip_all_tags( (string) $message );
+		$process_log[] = $entry;
+	}
+
+	/**
+	 * Check whether results contain any hard failures.
+	 *
+	 * @param array $results Installation results.
+	 * @return bool
+	 */
+	private static function results_have_failures( $results ) {
+		foreach ( $results as $result ) {
+			if ( isset( $result['status'] ) && 'error' === $result['status'] ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Render a feedback summary notice for the user.
+	 *
+	 * @param array $results Installation results.
+	 */
+	private static function render_feedback_summary( $results ) {
+		if ( empty( $results ) ) {
+			return;
+		}
+
+		$counts = array(
+			'success' => 0,
+			'warning' => 0,
+			'error'   => 0,
+		);
+
+		foreach ( $results as $result ) {
+			$status = isset( $result['status'] ) ? $result['status'] : 'warning';
+			if ( isset( $counts[ $status ] ) ) {
+				$counts[ $status ]++;
+			}
+		}
+
+		$notice_class = 'notice-success';
+		if ( $counts['error'] > 0 ) {
+			$notice_class = 'notice-error';
+		} elseif ( $counts['warning'] > 0 ) {
+			$notice_class = 'notice-warning';
+		}
+		?>
+		<div class="notice <?php echo esc_attr( $notice_class ); ?> inline">
+			<p>
+				<?php
+				echo esc_html(
+					sprintf(
+						/* translators: 1: success count, 2: warning count, 3: error count */
+						__( 'Run complete: %1$d successful, %2$d warnings, %3$d errors.', 'bulk-plugin-installer' ),
+						$counts['success'],
+						$counts['warning'],
+						$counts['error']
+					)
+				);
+				?>
+			</p>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Render execution log and a download button when failures exist.
+	 *
+	 * @param array $process_log Log entries.
+	 * @param bool  $has_failures Whether the run had errors.
+	 */
+	private static function render_process_log( $process_log, $has_failures ) {
+		if ( empty( $process_log ) || ! $has_failures ) {
+			return;
+		}
+
+		$log_text      = implode( "\n", $process_log );
+		$download_name = 'bpi-install-log-' . gmdate( 'Ymd-His' ) . '.txt';
+		?>
+		<h2><?php esc_html_e( 'Failure Log', 'bulk-plugin-installer' ); ?></h2>
+		<p><?php esc_html_e( 'One or more installs failed. Review the log below and download it for troubleshooting or support.', 'bulk-plugin-installer' ); ?></p>
+		<p>
+			<button type="button" class="button" id="bpi-download-log"><?php esc_html_e( 'Download Log', 'bulk-plugin-installer' ); ?></button>
+		</p>
+		<textarea id="bpi-process-log" readonly rows="14" style="width:100%;max-width:1000px;font-family:monospace;"><?php echo esc_textarea( $log_text ); ?></textarea>
+		<script>
+			(function () {
+				var button = document.getElementById('bpi-download-log');
+				var logField = document.getElementById('bpi-process-log');
+				if (!button || !logField) {
+					return;
+				}
+
+				button.addEventListener('click', function () {
+					var blob = new Blob([logField.value], { type: 'text/plain;charset=utf-8' });
+					var url = window.URL.createObjectURL(blob);
+					var link = document.createElement('a');
+					link.href = url;
+					link.download = <?php echo wp_json_encode( $download_name ); ?>;
+					document.body.appendChild(link);
+					link.click();
+					document.body.removeChild(link);
+					window.URL.revokeObjectURL(url);
+				});
+			})();
+		</script>
+		<?php
 	}
 
 	/**
