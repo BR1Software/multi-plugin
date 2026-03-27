@@ -3,7 +3,7 @@
  * Plugin Name: Bulk Plugin Installer
  * Description: Install multiple plugins from repository slugs, ZIP URLs, or uploaded ZIP files using a manifest text file.
  * Version: 1.0.0
- * Author: Novamira
+ * Author: BR1 Software Ltd
  * License: GPL-2.0-or-later
  */
 
@@ -277,8 +277,50 @@ class BPI_Bulk_Plugin_Installer {
 		wp_cache_flush();
 
 		$results = array();
+		$seen_sources = array();
+		$seen_folders = array();
+		$existing_plugin_dirs = self::get_existing_plugin_dir_set();
 
 		foreach ( $items as $item ) {
+			$source_key = $item['type'] . ':' . $item['value'];
+			if ( isset( $seen_sources[ $source_key ] ) ) {
+				$results[] = array(
+					'item'    => $item['label'],
+					'status'  => 'warning',
+					'message' => __( 'Duplicate manifest entry detected. Skipped to avoid reinstall collision.', 'bulk-plugin-installer' ),
+				);
+				continue;
+			}
+
+			$seen_sources[ $source_key ] = true;
+
+			$inferred_folder = self::infer_plugin_folder_from_item( $item );
+			if ( ! empty( $inferred_folder ) ) {
+				if ( isset( $seen_folders[ $inferred_folder ] ) ) {
+					$results[] = array(
+						'item'    => $item['label'],
+						'status'  => 'warning',
+						'message' => sprintf(
+							/* translators: %s: manifest source */
+							__( 'Potential plugin directory collision with %s. Skipped.', 'bulk-plugin-installer' ),
+							$seen_folders[ $inferred_folder ]
+						),
+					);
+					continue;
+				}
+
+				if ( isset( $existing_plugin_dirs[ $inferred_folder ] ) ) {
+					$results[] = array(
+						'item'    => $item['label'],
+						'status'  => 'warning',
+						'message' => __( 'A plugin with this directory already exists. Skipped to avoid overwrite collision.', 'bulk-plugin-installer' ),
+					);
+					continue;
+				}
+
+				$seen_folders[ $inferred_folder ] = $item['label'];
+			}
+
 			$install_target = '';
 
 			switch ( $item['type'] ) {
@@ -368,9 +410,66 @@ class BPI_Bulk_Plugin_Installer {
 				'status'  => 'success',
 				'message' => __( 'Installed successfully.', 'bulk-plugin-installer' ),
 			);
+
+			if ( ! empty( $inferred_folder ) ) {
+				$existing_plugin_dirs[ $inferred_folder ] = true;
+			}
 		}
 
 		return $results;
+	}
+
+	/**
+	 * Build a set of existing plugin directories keyed by directory name.
+	 *
+	 * @return array<string, bool>
+	 */
+	private static function get_existing_plugin_dir_set() {
+		$plugins = get_plugins();
+		$dirs    = array();
+
+		foreach ( array_keys( $plugins ) as $plugin_file ) {
+			$first_segment = strtok( $plugin_file, '/' );
+			if ( false !== $first_segment && false === strpos( $first_segment, '.php' ) ) {
+				$dirs[ $first_segment ] = true;
+			}
+		}
+
+		return $dirs;
+	}
+
+	/**
+	 * Infer plugin directory from a manifest item for collision detection.
+	 *
+	 * @param array $item Parsed manifest item.
+	 * @return string
+	 */
+	private static function infer_plugin_folder_from_item( $item ) {
+		if ( empty( $item['type'] ) || empty( $item['value'] ) ) {
+			return '';
+		}
+
+		if ( 'repo' === $item['type'] ) {
+			return sanitize_file_name( $item['value'] );
+		}
+
+		if ( 'zip' === $item['type'] ) {
+			$filename = preg_replace( '/\.zip$/i', '', $item['value'] );
+			return sanitize_file_name( (string) $filename );
+		}
+
+		if ( 'url' === $item['type'] ) {
+			$path = wp_parse_url( $item['value'], PHP_URL_PATH );
+			if ( empty( $path ) ) {
+				return '';
+			}
+
+			$filename = basename( $path );
+			$filename = preg_replace( '/\.zip$/i', '', $filename );
+			return sanitize_file_name( (string) $filename );
+		}
+
+		return '';
 	}
 
 	/**

@@ -1,5 +1,8 @@
 # Bulk Plugin Installer
 
+*Use at your own risk.
+I do not offer any support or accept any issues you might have as a result of using this code*
+
 Bulk install WordPress plugins from:
 - WordPress.org repository slugs
 - Direct ZIP URLs
